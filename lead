@@ -455,23 +455,18 @@ cannot include spaces, as whitespace is used as a delimiter between patterns.
 
 =over 4
 
-# Perform a backup to the configured server called C<somehost>.
+ # Perform a backup to the configured server called C<somehost>.
+ $ lead somehost
 
-$ lead somehost
+ # Perform a backup to the configured server called C<otherhost> using a different configuration file.
+ $ lead -f path/to/lead.conf otherhost
 
-# Perform a backup to the configured server called C<otherhost> using a different
-configuration file.
+ # Same as above, except also give extra options to rsync and exclude all files ending
+ in F<.o>.
+ $ lead -f path/to/lead.conf otherhost -e "--ignore-errors" -x "*.o"
 
-$ lead -f path/to/lead.conf otherhost
-
-# Same as above, except also give extra options to rsync and exclude all files ending
-in F<.o>.
-
-$ lead -f path/to/lead.conf otherhost -e "--ignore-errors" -x "*.o"
-
-# Transfer files on the fly without using any preconfigured server
-
-$ lead -b urgent -a example.net -u joe -p "secret sauce" -m private -p users/joe/ -e "--delete-excluded" -x "*.tmp"
+ # Transfer files on the fly without using any preconfigured server
+ $ lead -b urgent -a example.net -u joe -p "secret sauce" -m private -p users/joe/ -e "--delete-excluded" -x "*.tmp"
 
 =back
 
