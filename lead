@@ -1,0 +1,511 @@
+#!/usr/bin/perl
+
+# Copyright (C) 2017 by multiplex'd <multiplexd@gmx.com>
+#
+# Permission to use, copy, modify, and/or distribute this software for
+# any purpose with or without fee is hereby granted.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL
+# WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE
+# AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
+# DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR
+# PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+# TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+# PERFORMANCE OF THIS SOFTWARE.
+
+use strict;
+use warnings;
+
+use Config::Tiny;                          # Configuration parsing
+use Getopt::Long qw/:config gnu_getopt/;   # Getopt
+use List::MoreUtils qw/any one/; # any() and one() functions
+
+
+our $version = "1.0"; # Version string
+
+sub help (;$); # Prototype of help(); makes later invocations look nicer
+
+our %cmdopts = ( # Command line options
+		# Global options
+		"rsync"     => "", # Path to rsync executable
+		"rsyncopts" => "", # Options to pass to rsync
+		"config"    => "", # Path to configuration file
+
+		# Per-server options
+		"extraopts" => "", # Extra options to pass to rsync
+		"backup"    => "", # Path to backup, in rsync form
+		"address"   => "", # Address of the server to back up to; disables presets
+		"user"      => "", # Username to use on the server
+		"pass"      => "", # Password to use on the server
+		"module"    => "", # Module on the rsync server
+		"path"      => "", # Path to backup to within the specified module
+		"exclude"   => "", # Space seperated list of exclude rules to pass to rsync
+	       );
+
+our %intopts = ( # Internal options
+		# Global options
+		"rsync"     => "/usr/bin/rsync",                   # Path to rsync executable
+		"rsyncopts" => "-avzP --delete --delete-excluded", # Options to pass to rsync
+		"config"    => "$ENV{'HOME'}/.config/lead.conf",   # Path to configuration file
+		"preset"    => 1,                                  # Are we reading a preset? Default yes.
+
+		# Per-server options. Initialised by command line and config file parsing.
+		"extraopts" => "", # Extra options to pass to rsync
+		"backup"    => "", # Path to backup, in rsync form
+		"address"   => "", # Address of the server to back up to; disables presets
+		"user"      => "", # Username to use on the server
+		"pass"      => "", # Password to use on the server
+		"module"    => "", # Module on the rsync server
+		"path"      => "", # Path to backup to within the specified module
+		"exclude"   => "", # Space seperated list of exclude rules to pass to rsync
+	       );
+
+
+our $config = Config::Tiny->new; # Configuration file parser.
+our $server; # Identifier of the server used when using a preset
+
+sub main {
+   # Get our command line args
+   GetOptions("r|rsync=s"         => \$cmdopts{"rsync"},
+	      "o|rsyncopts=s"     => \$cmdopts{"rsyncopts"},
+	      "f|config=s"        => \$cmdopts{"config"},
+	      "e|extraopts=s"     => \$cmdopts{"extraopts"},
+	      "b|backup=s"        => \$cmdopts{"backup"},
+	      "a|address=s"       => \$cmdopts{"address"},
+	      "u|user|username=s" => \$cmdopts{"user"},
+	      "p|pass|password=s" => \$cmdopts{"pass"},
+	      "m|module=s"        => \$cmdopts{"module"},
+	      "P|path=s"          => \$cmdopts{"path"},
+	      "x|exclude=s"       => \$cmdopts{"exclude"},
+	      "h|help"            => sub { help; },
+	      # Creating a reference to help() causes it to be evalled,
+	      # which confuses the argument counting logic
+	     ) || exit 1;
+
+   check_opts();
+
+   # If an address has been provided then we aren't using a preset
+   if($cmdopts{"address"} ne "") {
+      $intopts{"preset"} = 0;
+
+      # Go directly to other things
+      count_args();     # Check that there isn't anything spurious in @ARGV
+      splice_cmdline(); # Copy necessary info from %cmdopts into %intopts
+      sanity_check();   # Check that we actually have all the necessary info
+      do_rsync();       # Fire off into rsync itself
+      exit 0;           # Should never be reached
+   }
+
+   # At this point, we know that we're using a preset configuration
+   # Check our non option command line
+   count_args("");
+
+   # Check for alternate config file
+   if($cmdopts{"config"} ne "") {
+      $intopts{"config"} = $cmdopts{"config"};
+   }
+
+   # Try to read the configuration file
+   $config = Config::Tiny->read($intopts{"config"})
+     || die "Could not find configuration file $intopts{'config'}, stopped at";
+
+   # Get our server name
+   ($server) = @ARGV;
+
+   # Parse the configuration file
+   parse_config();
+
+   # Copy any overrides from %cmdopts over initialised data from %intopts
+   splice_cmdline();
+
+   # Jump off into rsync and actually do the backup
+   do_rsync();
+
+   # Should never be reached
+   exit 0
+}
+
+sub check_opts { # Check that the provided command line options are non-conflicting
+
+   if($cmdopts{"config"} ne "" && $cmdopts{"address"} ne "") {
+      # Both address and config are set;
+      help "short";
+      die "Conflicting options, stopped at";
+   }
+}
+
+sub count_args {
+   # Check that our command line contains the same number of values as arguments
+   # to this function
+
+   my $numcmd = @ARGV;
+   my $numarg = @_;
+
+   if($numcmd < $numarg) {
+      help "short";
+      die "Too few arguments, stopped at";
+   } elsif($numcmd > $numarg) {
+      help "short";
+      die "Too many arguments, stopped at";
+   }
+
+}
+
+sub help (;$) { # Show help information; prototype makes invocations look nicer
+   if(@_) {
+      # If the number of arguments is non zero, show short help
+
+   } else {
+      # Otherwise, give full length help and exit
+
+      exit 0;
+   }
+}
+
+sub parse_config { # Parse the configuration file data
+   my @servers; # List of configured servers
+   my $dowarn = 0;
+
+   die "Configuration file error, no servers specified; stopped at"
+     unless(exists $$config{_}{servers});
+
+   @servers = split " ", $$config{_}{servers}; # Magic with split; see perldoc
+
+   die "Requested server not found in configuration file, stopped at"
+     unless(any {$_ eq $server} (@servers));
+
+   warn "Warning: duplicate server names in configuration file"
+     unless(one {$_ eq $server} (@servers));
+
+   for my $i (@servers) {
+      $dowarn = 1 unless(exists $$config{$i});
+   }
+
+   die "Requested server not configured in configuration file, stopped at"
+     unless(exists $$config{$server});
+
+   warn "Warning: some servers listed in configuration file are not configured"
+     if($dowarn);
+
+   # Get globally configurable options
+   opt("_", "rsync");
+   opt("_", "rsyncopts");
+   opt("_", "backup");
+   opt("_", "exclude");
+
+   # Get per-server options for the selected server
+   opt($server, "extraopts");
+   opt($server, "backup");
+   opt($server, "exclude");
+   opt($server, "address");
+   opt($server, "user");
+   opt($server, "pass");
+   opt($server, "module");
+   opt($server, "path");
+}
+
+sub opt { # Wrapper to grab configuration settings
+   my ($block, $setting) = @_;
+
+   $intopts{$setting} = $$config{$block}{$setting} if(exists $$config{$block}{$setting});
+}
+
+sub splice_cmdline { # Merge the command line information into the global options hash
+
+   # This repeats some of the work done in main() when this function is called
+   # when a preset configuration file is being used, but it keeps the code simple
+   # and allows us to simply loop over all the relevant hash keys.
+   for my $i (keys %cmdopts) {
+      if($cmdopts{$i} ne "") { # Only copy non-null values; don't overwrite values
+	 $intopts{$i} = $cmdopts{$i}; # %intopts contains a superset of the keys in %cmdopts
+      }
+   }
+}
+
+sub sanity_check { # Check the semantics of the command line options
+
+   # Cough and die if any of the required conf values are missing
+   check_opt("rsync");
+   check_opt("rsyncopts");
+   check_opt("backup");
+   check_opt("address");
+   check_opt("user");
+   check_opt("module");
+   check_opt("path");
+}
+
+sub check_opt { # Wrapper for checking for required values
+   my $opt = shift;
+
+   die "Required configuration value $opt is undefined, stopped at"
+     unless($intopts{$opt} ne "");
+}
+
+sub do_rsync { # exec into rsync; this should never return
+   my @options;
+   my $at = '@'; # Work around the parser
+
+   # Set up the rsync password if defined.
+   $ENV{"RSYNC_PASSWORD"} = $intopts{"pass"}
+     unless($intopts{"pass"} eq "");
+
+   push @options, $intopts{"rsync"};
+   push @options, (split ' ', $intopts{"rsyncopts"}); # More split magic
+   push @options, (split ' ', $intopts{"extraopts"});
+
+   if($intopts{"exclude"} ne "") {
+      for my $i (split ' ', $intopts{"exclude"}) {
+	 push @options, "--exclude=$i";
+      }
+   }
+
+   push @options, $intopts{"backup"};
+   push @options,
+     "$intopts{'user'}$at$intopts{'address'}::$intopts{'module'}/$intopts{'path'}";
+
+   exec (@options) # Force list context
+     || die "Could not execute rsync program ($!), stopped at"
+}
+
+main();
+
+=head1 NAME
+
+lead - a wrapper around rsync for performing backups
+
+=head1 SYNOPSIS
+
+B<lead> [B<-r> I<rsync>] [B<-o> I<rsyncopts>] [B<-f> I<config>] [B<-a> I<address>] 
+[B<-e> I<extraopts>] [B<-b> I<backup>] [B<-u> I<user>] [B<-p> I<pass>]
+[B<-m> I<module>] [B<-P> I<path>] [B<-x> I<exclude>] [B<-h>] [I<servername>]
+
+=head1 DESCRIPTION
+
+I<lead> is a wrapper around rsync(1) to allow for simple automated and 
+configured backups. It also allows command line options to override
+preset values or to define a backup scheme on the fly without a configuration 
+file. I<lead> will read its configuration options and command line arguments
+and then exec(3) into rsync.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-r>, B<--rsync>
+
+Path to the rsync binary to use. The default value is F</usr/bin/rsync>.The 
+configuration file option for this flag is C<rsync>.
+
+=item B<-o>, B<--rsyncopts>
+
+Extra options to pass to rsync (default: C<-avzP --delete --delete-excluded>).
+Do not specify exclude patterns using this option; use B<-x> or B<--exclude>. The 
+configuration file option for this flag is C<rsyncopts>.
+
+=item B<-f>, B<--config>
+
+Path to alternate configuration file (default: F<$HOME/.config/lead.conf>). This 
+option cannot be specified with B<-a> or B<--address>.
+
+=item B<-e>, B<--extraopts>
+
+Additional options to pass to rsync. Do not specify exclude patterns using this 
+option; use B<-x> or B<--exclude>. The configuration file option for this flag
+is C<extraopts>.
+
+=item B<-b>, B<--backup>
+
+The path to the directory on the local filesystem which is to be backed up. The 
+configuration file option for this flags is C<backup>.
+
+Note that the argument follows the semantics rsync uses regarding trailing slashes,
+that is, if the path does I<not> contain a trailing slash, then rsync creates a 
+directory on the server at the destination path if it does not exist and copies 
+the local directory's contents to the remote (and possibly newly created) 
+directory; however if the path I<does> contain a trailing slash, then the contents
+of the local directory are copied to the remote destination path.
+
+=item B<-a>, B<--address>
+
+The name of the server which the backup will be sent to. This option cannot be
+specified with B<-f> or B<--config>. The configuration file option for this flag
+is C<address>.
+
+=item B<-u>, B<--user>, B<--username>
+
+The username to access the server with. If the server allows public access without 
+any username required then this should be set to C<guest>. The configuration file 
+option for this flag is C<user>.
+
+=item B<-p>, B<--pass>, B<--password>
+
+The password to use when accessing the server, if required. If this flag is not 
+specified and a password is required then rsync will prompt for the password when
+lead exec()'s into rsync. The configuration file option for this flag is C<pass>.
+
+Note that in the confirguration file the password is stored in plain text and that 
+other processes may be able to read lead's command line when it is running, which 
+could lead to the password being stolen. In this case it may be desirable to 
+specify the password manually every time or to use a configuration file which is 
+readable only by the user running lead.
+
+=item B<-m>, B<--module>
+
+The module on the server which the backup will be sent to. The configuration file
+option for this flag is C<module>.
+
+=item B<-P>, B<--path>
+
+The path to the destination directory on the backup server relative to the 
+specified module. The configuration file option for this flage is C<path>.
+
+=item B<-x>, B<--exclude>
+
+A space-seperated list of exclude patterns to be passed to rsync. The configuration
+file option for this flag is C<exclude>.
+
+=back
+
+=head1 EXIT STATUS
+
+lead will exit non-zero if an error occurs while processing options to rsync. After
+lead has exec()'ed into rsync then any exit statuses should be interpreted as in
+rsync(1).
+
+=head1 ENVIRONMENT VARIABLES
+
+lead does not use any user-provided environment variables, apart from PATH if the
+absolute path to rsync is not specified. Internally, it uses the RSYNC_PASSWORD
+environment variable to pass a password to rsync without rsync prompting for
+one from the user.
+
+=head1 FILES
+
+=head2 Configuration File
+
+lead uses a configuration file to store the details of the backup server and the
+local files to backup. By default, lead expects this file to be
+F<$HOME/.config/lead.conf>, however this may be overridden on the command line
+using the B<-f> flag. In addition, any options in the configuration file will be
+overridden by options given at the command line.
+
+The configuration file contains blocks, of which there is one for each server to
+which backups may be sent, global options, which apply to all backup transactions
+made, and local options, which specify options only for the server whose block
+they appear under.
+
+Blocks are denoted by the name of the block enclosed in square brackets on its own
+line; for a block entitled "somenode" the corresponding block header would be
+C<[somenode]> on a line by itself. Any local options specific to the block are listed
+below the block header. A new block is started when another header occurs in the file.
+
+Options are specified one per line, with the name of the option, an equals sign and
+then the value of the option. Global options are specified at the beginning of the
+configuration file before any block headers. Local options are specified below the
+block header of the server they apply to.
+
+There are some options which may be specifed both globally and per-server; in this
+case the per-server options take precedence.
+
+There is a compulsory global option C<servers> which must be specifed and whose value
+should be a space seperated list of servers which are configured in the configuration
+file with blocks of corresponding names for each server specifying local options. lead
+will complain if it finds servers specified in the global C<servers> option which aren't
+then later configured in their own blocks.
+
+=head3 Options List
+
+=over 4
+
+OPTION       GLOBAL/LOCAL       SETTING
+
+servers      Global             List of configured servers that may be used
+
+rsync        Global             See -r flag above
+
+rsyncopts    Global             See -o flag above
+
+extraopts    Local              See -e flag above
+
+backup       Both               See -b flag above
+
+address      Local              See -a flag above
+
+user         Local              See -u flag above
+
+pass         Local              See -p flag above
+
+module       Local              See -m flag above
+
+path         Local              See -P flag above
+
+exclude      Both               See -x flag above
+
+=back
+
+=head1 BUGS
+
+The exclude patterns given either in the configuration file or on the command line
+cannot include spaces, as whitespace is used as a delimiter between patterns.
+
+=head1 EXAMPLES
+
+=head2 Invocation of lead
+
+=over 4
+
+# Perform a backup to the configured server called C<somehost>.
+
+$ lead somehost
+
+# Perform a backup to the configured server called C<otherhost> using a different
+configuration file.
+
+$ lead -f path/to/lead.conf otherhost
+
+# Same as above, except also give extra options to rsync and exclude all files ending
+in F<.o>.
+
+$ lead -f path/to/lead.conf otherhost -e "--ignore-errors" -x "*.o"
+
+# Transfer files on the fly without using any preconfigured server
+
+$ lead -b urgent -a example.net -u joe -p "secret sauce" -m private -p users/joe/ -e "--delete-excluded" -x "*.tmp"
+
+=back
+
+=head2 Configuration File
+
+=over 4
+
+ servers = foobar homehost workhost
+ rsyncopts = -avzP --delete --ignore-errors --delete-excluded
+ exclude = .cache/
+ backup = /home/joe/
+
+ [foobar]
+ user = me
+ address = foobar.somedomain
+ module = joe
+ path = backup
+
+ [homehost]
+ user = joe
+ address = 172.20.3.4
+ module = backups
+ exclude = misc/
+
+ [workhost]
+ user = jrandom
+ address = backup.internal
+ module = users
+ path = backups/jrandom
+
+=back
+
+=head1 SEE ALSO
+
+rsync(1)
+
+=cut
