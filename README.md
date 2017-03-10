@@ -8,6 +8,11 @@ backups should be *easy*.
 There's embedded POD in the script - try `perldoc ./lead`, or if you
 prefer man pages `pod2man ./lead | man -l /dev/stdin`.
 
+## Dependencies
+
+The script requires rsync and the List::MoreUtils and Config::Tiny
+perl modules.
+
 ## Name
 
 It's a *p*erl *b*ackup script. `Pb` is the chemical symbol for Lead,
