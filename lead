@@ -22,7 +22,7 @@ use Getopt::Long qw/:config gnu_getopt/;   # Getopt
 use List::MoreUtils qw/any one/; # any() and one() functions
 
 
-our $version = "1.0"; # Version string
+our $prog = $0;
 
 sub help (;$); # Prototype of help(); makes later invocations look nicer
 
@@ -155,10 +155,30 @@ sub count_args {
 sub help (;$) { # Show help information; prototype makes invocations look nicer
    if(@_) {
       # If the number of arguments is non zero, show short help
-
+      print "Usage: $prog [-r rsync] [-o rsyncopts] [-f config] [-a address] ",
+	"[-e extraopts] [-b backup] [-u user] [-p pass] [-m module] [-P path] ",
+	"[-x exclude] [-h] [servername]\n";
    } else {
       # Otherwise, give full length help and exit
+      print "Usage: $prog [OPTIONS] [<servername>]\n";
+      print "Options:\n\n";
+      print <<EOF;
+    -r, --rsync        Path to rsync.
+    -o, --rsyncopts    Options to pass to rsync.
+    -f, --config       Path to configuration file (default: ~/.config/lead.conf).
+    -a, --address      Address of remote server.
+    -e, --extraopts    Extra options to pass to rsync.
+    -b, --backup       Local path to backup.
+    -u, --user         Username to use on remote server.
+    -p, --pass         Password to use on remote server.
+    -m, --module       Module on remote server to use.
+    -P, --path         Path to be appended to module.
+    -x, --exclude      Space separated list of exlcude patterns to pass to rsync.
+    -h, --help         Show this help message.
 
+The -a or --address options cannot be used when specifying a preconfigured remote 
+server to be used.
+EOF
       exit 0;
    }
 }
