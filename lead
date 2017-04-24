@@ -108,7 +108,7 @@ sub main {
 
    # Try to read the configuration file
    $config = Config::Tiny->read($intopts{"config"})
-     || die "Could not find configuration file $intopts{'config'}, stopped at";
+     || die "Could not find configuration file $intopts{'config'}, stopped";
 
    # Get our server name
    ($server) = @ARGV;
@@ -131,7 +131,7 @@ sub check_opts { # Check that the provided command line options are non-conflict
    if($cmdopts{"config"} ne "" && $cmdopts{"address"} ne "") {
       # Both address and config are set;
       help "short";
-      die "Conflicting options, stopped at";
+      die "Conflicting options, stopped";
    }
 }
 
@@ -144,10 +144,10 @@ sub count_args {
 
    if($numcmd < $numarg) {
       help "short";
-      die "Too few arguments, stopped at";
+      die "Too few arguments, stopped";
    } elsif($numcmd > $numarg) {
       help "short";
-      die "Too many arguments, stopped at";
+      die "Too many arguments, stopped";
    }
 
 }
@@ -187,12 +187,12 @@ sub parse_config { # Parse the configuration file data
    my @servers; # List of configured servers
    my $dowarn = 0;
 
-   die "Configuration file error, no servers specified; stopped at"
+   die "Configuration file error, no servers specified; stopped"
      unless(exists $$config{_}{servers});
 
    @servers = split " ", $$config{_}{servers}; # Magic with split; see perldoc
 
-   die "Requested server not found in configuration file, stopped at"
+   die "Requested server not found in configuration file, stopped"
      unless(any {$_ eq $server} (@servers));
 
    warn "Warning: duplicate server names in configuration file"
@@ -202,7 +202,7 @@ sub parse_config { # Parse the configuration file data
       $dowarn = 1 unless(exists $$config{$i});
    }
 
-   die "Requested server not configured in configuration file, stopped at"
+   die "Requested server not configured in configuration file, stopped"
      unless(exists $$config{$server});
 
    warn "Warning: some servers listed in configuration file are not configured"
@@ -258,7 +258,7 @@ sub sanity_check { # Check the semantics of the command line options
 sub check_opt { # Wrapper for checking for required values
    my $opt = shift;
 
-   die "Required configuration value $opt is undefined, stopped at"
+   die "Required configuration value $opt is undefined, stopped"
      unless($intopts{$opt} ne "");
 }
 
@@ -285,7 +285,7 @@ sub do_rsync { # exec into rsync; this should never return
      "$intopts{'user'}$at$intopts{'address'}::$intopts{'module'}/$intopts{'path'}";
 
    exec (@options) # Force list context
-     || die "Could not execute rsync program ($!), stopped at"
+     || die "Could not execute rsync program ($!), stopped"
 }
 
 main();
